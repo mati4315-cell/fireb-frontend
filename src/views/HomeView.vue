@@ -1,0 +1,517 @@
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted } from 'vue'
+import { useFeedStore } from '@/stores/feedStore'
+import { useAuthStore } from '@/stores/authStore'
+import { useStorageStore } from '@/stores/storageStore'
+
+const feedStore = useFeedStore()
+const authStore = useAuthStore()
+const storageStore = useStorageStore()
+
+// Form state
+const newPostTitle = ref('')
+const newPostContent = ref('')
+const selectedFile = ref<File | null>(null)
+const imagePreview = ref<string | null>(null)
+const isExpanded = ref(false)
+
+onMounted(() => {
+  feedStore.initFeed()
+})
+
+onUnmounted(() => {
+  feedStore.cleanup()
+})
+
+const handleFileSelect = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  if (target.files && target.files[0]) {
+    selectedFile.value = target.files[0]
+    imagePreview.value = URL.createObjectURL(target.files[0])
+  }
+}
+
+const handleCreatePost = async () => {
+  if (!newPostContent.value.trim()) return
+
+  try {
+    let imageUrls: string[] = []
+    
+    if (selectedFile.value) {
+      const path = `posts/${authStore.user?.uid}/${Date.now()}_${selectedFile.value.name}`
+      const url = await storageStore.uploadFile(selectedFile.value, path)
+      imageUrls.push(url)
+    }
+
+    await feedStore.createPost(
+      newPostTitle.value || 'Nueva Publicación',
+      newPostContent.value,
+      imageUrls
+    )
+
+    // Reset form
+    newPostTitle.value = ''
+    newPostContent.value = ''
+    selectedFile.value = null
+    imagePreview.value = null
+    isExpanded.value = false
+  } catch (err) {
+    console.error('Error al crear post:', err)
+  }
+}
+
+const handleLoadMore = () => {
+  feedStore.loadMore()
+}
+
+const formatDate = (date: any) => {
+  if (!date) return ''
+  const d = date.toDate ? date.toDate() : new Date(date)
+  return new Intl.DateTimeFormat('es-AR', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(d)
+}
+</script>
+
+<template>
+  <div class="feed-container">
+    <!-- Create Post Section -->
+    <section v-if="authStore.isAuthenticated" class="create-post-section">
+      <div class="create-card" :class="{ expanded: isExpanded }">
+        <div class="user-avatar">
+          <img v-if="authStore.userProfile?.profilePictureUrl" :src="authStore.userProfile.profilePictureUrl" />
+          <div v-else class="avatar-placeholder">{{ authStore.userProfile?.nombre?.charAt(0) }}</div>
+        </div>
+        
+        <div class="form-container">
+          <input 
+            v-if="isExpanded"
+            v-model="newPostTitle"
+            type="text" 
+            placeholder="Título (opcional)" 
+            class="title-input"
+          />
+          <textarea 
+            v-model="newPostContent"
+            placeholder="¿Qué estás pensando?" 
+            class="content-input"
+            @focus="isExpanded = true"
+            :rows="isExpanded ? 4 : 1"
+          ></textarea>
+
+          <div v-if="imagePreview" class="image-preview-container">
+            <img :src="imagePreview" class="preview-img" />
+            <button @click="imagePreview = null; selectedFile = null" class="remove-preview">×</button>
+          </div>
+
+          <div v-if="isExpanded" class="form-footer">
+            <div class="actions">
+              <label class="icon-btn">
+                <input type="file" @change="handleFileSelect" accept="image/*" hidden />
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+                <span>Imagen</span>
+              </label>
+            </div>
+            
+            <div class="submit-group">
+              <button @click="isExpanded = false" class="cancel-btn">Cancelar</button>
+              <button 
+                @click="handleCreatePost" 
+                :disabled="!newPostContent.trim() || storageStore.uploading"
+                class="publish-btn"
+              >
+                {{ storageStore.uploading ? `Subiendo ${Math.round(storageStore.uploadProgress)}%` : 'Publicar' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Feed List -->
+    <div v-if="feedStore.loading && feedStore.allItems.length === 0" class="loading-state">
+      <div class="spinner"></div>
+      <p>Sincronizando con CdeluAR...</p>
+    </div>
+
+    <div v-else-if="feedStore.allItems.length === 0" class="empty-state">
+      <div class="empty-icon">📭</div>
+      <h3>No hay nada por aquí</h3>
+      <p>Sé el primero en compartir algo con la comunidad.</p>
+    </div>
+
+    <div v-else class="post-list">
+      <div v-for="item in feedStore.allItems" :key="item.id" class="post-card">
+        <header class="post-header">
+          <div class="post-user">
+            <img v-if="item.userProfilePicUrl" :src="item.userProfilePicUrl" class="mini-avatar" />
+            <div v-else class="mini-avatar-placeholder">{{ item.userName?.charAt(0) || 'U' }}</div>
+            <div class="user-details">
+              <span class="user-name">{{ item.userName || 'Usuario' }}</span>
+              <span class="post-date">{{ formatDate(item.createdAt) }}</span>
+            </div>
+          </div>
+          <div v-if="item.type === 'news'" class="tag news">Noticia</div>
+        </header>
+
+        <div class="post-content">
+          <h3 v-if="item.titulo && item.titulo !== 'Nueva Publicación'">{{ item.titulo }}</h3>
+          <p>{{ item.descripcion }}</p>
+          
+          <div v-if="item.images && item.images.length > 0" class="post-images">
+            <img :src="item.images[0]" class="main-image" loading="lazy" />
+          </div>
+        </div>
+
+        <footer class="post-footer">
+          <button class="interaction-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
+            <span>{{ item.stats?.likesCount || 0 }}</span>
+          </button>
+          <button class="interaction-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 1 1-7.6-10.6 8.38 8.38 0 0 1 3.8.9L21 3z"></path></svg>
+            <span>{{ item.stats?.commentsCount || 0 }}</span>
+          </button>
+          <button class="interaction-btn share">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
+          </button>
+        </footer>
+      </div>
+
+      <button v-if="feedStore.hasMore" @click="handleLoadMore" :disabled="feedStore.loading" class="load-more-btn">
+        <span v-if="!feedStore.loading">Ver más publicaciones</span>
+        <span v-else class="loader-dots">...</span>
+      </button>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.feed-container {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+/* Create Post Section */
+.create-post-section {
+  margin-bottom: 2rem;
+}
+
+.create-card {
+  display: flex;
+  gap: 1rem;
+  background: var(--card-bg);
+  padding: 1.25rem;
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+  border: 1px solid var(--border);
+  transition: all 0.3s ease;
+}
+
+.create-card.expanded {
+  flex-direction: column;
+}
+
+.user-avatar {
+  flex-shrink: 0;
+}
+
+.user-avatar img, .avatar-placeholder {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  object-fit: cover;
+}
+
+.avatar-placeholder {
+  background: var(--accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 1.2rem;
+}
+
+.form-container {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.title-input {
+  border: none;
+  font-size: 1.1rem;
+  font-weight: 700;
+  background: transparent;
+  color: var(--text-h);
+  outline: none;
+}
+
+.content-input {
+  border: none;
+  font-size: 1rem;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+  min-height: 80px;
+}
+
+.image-preview-container {
+  position: relative;
+  margin-top: 0.5rem;
+  border-radius: 12px;
+  overflow: hidden;
+  max-height: 300px;
+}
+
+.preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.remove-preview {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: rgba(0,0,0,0.6);
+  color: white;
+  border: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.form-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.icon-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.icon-btn:hover {
+  background: var(--accent-bg);
+}
+
+.submit-group {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.cancel-btn {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.publish-btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 0.6rem 1.5rem;
+  border-radius: 99px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.2s, opacity 0.2s;
+}
+
+.publish-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.publish-btn:not(:disabled):hover {
+  transform: translateY(-2px);
+}
+
+/* Post Card */
+.post-card {
+  background: var(--card-bg);
+  border-radius: 20px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 25px rgba(0,0,0,0.03);
+  transition: transform 0.2s, box-shadow 0.2s;
+  animation: fadeIn 0.5s ease-out forwards;
+}
+
+.post-header {
+  padding: 0 0 1.25rem 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.post-user {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.mini-avatar, .mini-avatar-placeholder {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.mini-avatar-placeholder {
+  background: var(--social-bg);
+  color: var(--text-h);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+}
+
+.user-details {
+  display: flex;
+  flex-direction: column;
+}
+
+.user-name {
+  font-weight: 700;
+  color: var(--text-h);
+  font-size: 0.95rem;
+}
+
+.post-date {
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+.tag {
+  font-size: 0.7rem;
+  font-weight: 800;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  text-transform: uppercase;
+}
+
+.tag.news {
+  background: #fff0f0;
+  color: #ff4d4d;
+}
+
+.post-content {
+  padding: 0;
+}
+
+.post-content h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.2rem;
+  color: var(--text-h);
+}
+
+.post-content p {
+  white-space: pre-wrap;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.post-images {
+  margin-top: 1rem;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.main-image {
+  width: 100%;
+  display: block;
+  max-height: 500px;
+  object-fit: cover;
+}
+
+.post-footer {
+  padding: 1.25rem 0 0 0;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 1.5rem;
+}
+
+.interaction-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.interaction-btn:hover {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.interaction-btn.share {
+  margin-left: auto;
+}
+
+/* Loading & Empty */
+.loading-state {
+  text-align: center;
+  padding: 4rem 0;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid var(--accent-bg);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 1rem;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.load-more-btn {
+  width: 100%;
+  padding: 1.25rem;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  font-weight: 700;
+  color: var(--text-h);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.load-more-btn:hover {
+  background: var(--social-bg);
+}
+</style>
